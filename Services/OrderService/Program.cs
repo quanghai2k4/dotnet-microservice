@@ -14,6 +14,7 @@ builder.Services.AddDbContext<OrderDbContext>(options =>
 
 builder.Services.AddRabbitMQ();
 builder.Services.AddHostedService<UserEventHandler>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 
 var app = builder.Build();
 

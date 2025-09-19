@@ -84,12 +84,16 @@ body {
     background-color: #ffc107;
 }
 
-.status-completed {
+.status-completed, .status-paid {
     background-color: #198754;
 }
 
-.status-cancelled {
+.status-cancelled, .status-failed {
     background-color: #dc3545;
+}
+
+.status-unpaid {
+    background-color: #6c757d;
 }
 
 .btn-action {

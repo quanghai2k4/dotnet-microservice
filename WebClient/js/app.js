@@ -276,6 +276,7 @@ function displayOrders() {
     orders.forEach(order => {
         const row = document.createElement('tr');
         const statusClass = `status-${order.status.toLowerCase()}`;
+        const paymentStatusClass = `status-${order.paymentStatus?.toLowerCase() || 'unpaid'}`;
         
         row.innerHTML = `
             <td>${order.id}</td>
@@ -284,11 +285,17 @@ function displayOrders() {
             <td>${order.quantity}</td>
             <td>$${order.price.toFixed(2)}</td>
             <td><span class="badge ${statusClass}">${order.status}</span></td>
+            <td><span class="badge ${paymentStatusClass}">${order.paymentStatus || 'Unpaid'}</span></td>
             <td>${formatDate(order.createdAt)}</td>
             <td>
                 <button class="btn btn-outline-primary btn-action btn-sm" onclick="viewOrder(${order.id})">
                     <i class="bi bi-eye"></i> View
                 </button>
+                ${order.paymentStatus !== 'Paid' ? `
+                <button class="btn btn-outline-success btn-action btn-sm" onclick="processPayment(${order.id})">
+                    <i class="bi bi-credit-card"></i> Pay
+                </button>
+                ` : ''}
                 <button class="btn btn-outline-danger btn-action btn-sm" onclick="deleteOrder(${order.id})">
                     <i class="bi bi-trash"></i> Delete
                 </button>
@@ -386,7 +393,101 @@ function viewOrder(orderId) {
         const user = users.find(u => u.id === order.userId);
         const userName = user ? user.name : 'Unknown User';
         
-        alert(`Order Details:\n\nID: ${order.id}\nUser: ${userName} (ID: ${order.userId})\nProduct: ${order.productName}\nQuantity: ${order.quantity}\nPrice: $${order.price.toFixed(2)}\nStatus: ${order.status}\nCreated: ${formatDate(order.createdAt)}`);
+        let orderDetails = `Order Details:\n\nID: ${order.id}\nUser: ${userName} (ID: ${order.userId})\nProduct: ${order.productName}\nQuantity: ${order.quantity}\nPrice: $${order.price.toFixed(2)}\nStatus: ${order.status}\nPayment Status: ${order.paymentStatus || 'Unpaid'}\nCreated: ${formatDate(order.createdAt)}`;
+        
+        if (order.paymentMethod) {
+            orderDetails += `\nPayment Method: ${order.paymentMethod}`;
+        }
+        
+        if (order.transactionId) {
+            orderDetails += `\nTransaction ID: ${order.transactionId}`;
+        }
+        
+        if (order.paidAt) {
+            orderDetails += `\nPaid At: ${formatDate(order.paidAt)}`;
+        }
+        
+        alert(orderDetails);
+    }
+}
+
+async function processPayment(orderId) {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
+    
+    if (order.paymentStatus === 'Paid') {
+        showToast('Order is already paid', 'error');
+        return;
+    }
+    
+    // Show payment method selection
+    const paymentMethod = prompt('Select payment method:\n1. Credit Card\n2. PayPal\n3. Bank Transfer\n\nEnter 1, 2, or 3:');
+    
+    let method;
+    switch(paymentMethod) {
+        case '1':
+            method = 'Credit Card';
+            break;
+        case '2':
+            method = 'PayPal';
+            break;
+        case '3':
+            method = 'Bank Transfer';
+            break;
+        default:
+            showToast('Invalid payment method selected', 'error');
+            return;
+    }
+    
+    // Ask if user wants to simulate failure
+    const simulateFailure = confirm('Do you want to simulate payment failure for testing?');
+    
+    try {
+        showToast(`Processing payment for $${order.price.toFixed(2)} via ${method}...`, 'success');
+        
+        const response = await fetch(`${API_BASE_URL}${ENDPOINTS.orders}/${orderId}/payment`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                paymentMethod: method,
+                simulateFailure: simulateFailure
+            })
+        });
+        
+        if (response.ok) {
+            const paymentResult = await response.json();
+            
+            // Update the order in local array
+            const orderIndex = orders.findIndex(o => o.id === orderId);
+            if (orderIndex !== -1) {
+                // Reload the order to get updated data
+                const updatedOrderResponse = await fetch(`${API_BASE_URL}${ENDPOINTS.orders}/${orderId}`);
+                if (updatedOrderResponse.ok) {
+                    orders[orderIndex] = await updatedOrderResponse.json();
+                }
+            }
+            
+            displayOrders();
+            
+            if (paymentResult.isSuccess) {
+                showToast(`Payment successful! Transaction ID: ${paymentResult.transactionId}`, 'success');
+            } else {
+                showToast(`Payment failed: ${paymentResult.message}`, 'error');
+            }
+            
+            // Update dashboard if visible
+            if (currentSection === 'dashboard') {
+                loadDashboardData();
+            }
+        } else {
+            const error = await response.text();
+            throw new Error(error || 'Failed to process payment');
+        }
+    } catch (error) {
+        console.error('Error processing payment:', error);
+        showToast('Failed to process payment', 'error');
     }
 }
 
