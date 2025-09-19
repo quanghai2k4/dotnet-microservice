@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OrderService.Models;
 using OrderService.Data;
+using OrderService.Services;
 using Common.RabbitMQ;
 
 namespace OrderService.Controllers;
@@ -13,12 +14,14 @@ public class OrdersController : ControllerBase
     private readonly OrderDbContext _context;
     private readonly IMessagePublisher _messagePublisher;
     private readonly ILogger<OrdersController> _logger;
+    private readonly IPaymentService _paymentService;
 
-    public OrdersController(OrderDbContext context, IMessagePublisher messagePublisher, ILogger<OrdersController> logger)
+    public OrdersController(OrderDbContext context, IMessagePublisher messagePublisher, ILogger<OrdersController> logger, IPaymentService paymentService)
     {
         _context = context;
         _messagePublisher = messagePublisher;
         _logger = logger;
+        _paymentService = paymentService;
     }
 
     [HttpGet]
@@ -107,5 +110,55 @@ public class OrdersController : ControllerBase
         _context.Orders.Remove(order);
         await _context.SaveChangesAsync();
         return NoContent();
+    }
+
+    [HttpPost("{id}/payment")]
+    public async Task<ActionResult<PaymentResult>> ProcessPayment(int id, PaymentRequest request)
+    {
+        var order = await _context.Orders.FindAsync(id);
+        if (order == null)
+        {
+            return NotFound();
+        }
+
+        if (order.PaymentStatus == "Paid")
+        {
+            return BadRequest("Order is already paid");
+        }
+
+        _logger.LogInformation("Processing payment for Order {OrderId} with method {PaymentMethod}", id, request.PaymentMethod);
+
+        var paymentResult = await _paymentService.ProcessPaymentAsync(order.Price, request);
+
+        if (paymentResult.IsSuccess)
+        {
+            order.PaymentStatus = "Paid";
+            order.PaymentMethod = request.PaymentMethod;
+            order.PaidAt = DateTime.UtcNow;
+            order.TransactionId = paymentResult.TransactionId;
+            order.Status = "Paid";
+        }
+        else
+        {
+            order.PaymentStatus = "Failed";
+            order.PaymentMethod = request.PaymentMethod;
+        }
+
+        await _context.SaveChangesAsync();
+
+        var paymentEvent = new PaymentCompletedEvent
+        {
+            OrderId = order.Id,
+            IsSuccess = paymentResult.IsSuccess,
+            PaymentMethod = request.PaymentMethod,
+            TransactionId = paymentResult.TransactionId,
+            ProcessedAt = DateTime.UtcNow
+        };
+
+        await _messagePublisher.PublishAsync("payment.events", paymentResult.IsSuccess ? "payment.completed" : "payment.failed", paymentEvent);
+
+        _logger.LogInformation("Payment {Status} for Order {OrderId}", paymentResult.IsSuccess ? "completed" : "failed", id);
+
+        return paymentResult;
     }
 }
